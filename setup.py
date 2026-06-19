@@ -1,6 +1,8 @@
 from setuptools import setup, Extension
+from setuptools.command.build_ext import build_ext as _ios_build_ext_base
 from glob import glob
 import os, sys, platform
+import subprocess
 
 # Default names of BLAS and LAPACK libraries
 BLAS_LIB = ['blas']
@@ -259,6 +261,52 @@ misc_solvers = Extension('misc_solvers',
 
 extmods += [base, blas, lapack, umfpack, cholmod, amd, misc_solvers]
 
+
+class IOSBuildExt(_ios_build_ext_base):
+    """Cross-compile each C extension for an iOS slice.
+
+    Activated by setting ``IOS_BUILD_PLATFORM`` to ``iphonesimulator`` or
+    ``iphoneos`` before the build. Unset, it is a transparent passthrough to
+    the upstream ``build_ext`` so host builds are unchanged. Optionally
+    prepends ``IOS_PYTHON_INCLUDE`` so the iOS Python framework headers
+    resolve ahead of the host's.
+    """
+
+    def build_extension(self, ext):
+        ios_platform = os.environ.get("IOS_BUILD_PLATFORM")
+        if not ios_platform:
+            return super().build_extension(ext)
+
+        if ios_platform not in ("iphonesimulator", "iphoneos"):
+            raise RuntimeError(
+                "IOS_BUILD_PLATFORM must be 'iphonesimulator' or 'iphoneos', "
+                "got: " + repr(ios_platform))
+
+        sdk_path = subprocess.check_output(
+            ["xcrun", "--sdk", ios_platform, "--show-sdk-path"],
+            text=True).strip()
+        version_min_flag = (
+            "-mios-simulator-version-min=16.0"
+            if ios_platform == "iphonesimulator"
+            else "-miphoneos-version-min=16.0")
+
+        ios_args = ["-arch", "arm64", "-isysroot", sdk_path, version_min_flag]
+        ext.extra_compile_args = (ext.extra_compile_args or []) + ios_args
+        ext.extra_link_args = (ext.extra_link_args or []) + ios_args + [
+            # Python symbols resolve at dlopen-time against the embedded
+            # interpreter; the iOS Python framework isn't on this static
+            # link line.
+            "-Wl,-undefined,dynamic_lookup",
+        ]
+
+        ios_python_include = os.environ.get("IOS_PYTHON_INCLUDE")
+        if ios_python_include:
+            ext.include_dirs = (
+                [ios_python_include] + list(ext.include_dirs or []))
+
+        super().build_extension(ext)
+
+
 setup (name = 'cvxopt',
     description = 'Convex optimization package',
     long_description = '''
@@ -277,6 +325,7 @@ language.''',
     license = 'GNU GPL version 3',
     ext_package = "cvxopt",
     ext_modules = extmods,
+    cmdclass = {"build_ext": IOSBuildExt},
     package_dir = {"cvxopt": "src/python"},
     package_data = {'': [".libs/*.dll", "LICENSE*"]},
     packages = ["cvxopt"],
