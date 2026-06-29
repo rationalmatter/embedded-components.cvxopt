@@ -304,6 +304,20 @@ class IOSBuildExt(_ios_build_ext_base):
             ext.include_dirs = (
                 [ios_python_include] + list(ext.include_dirs or []))
 
+        # Link the extension as a real dynamic library (MH_DYLIB), not a
+        # -bundle (MH_BUNDLE). The host LDSHARED used for the link defaults to
+        # -bundle, but App Store validation rejects MH_BUNDLE binaries packaged
+        # inside a framework, so swap it for -dynamiclib here. C++ extensions link
+        # through a separate linker (linker_so_cxx), so rewrite both.
+        for _link_attr in ("linker_so", "linker_so_cxx"):
+            _linker = getattr(self.compiler, _link_attr, None)
+            if not _linker:
+                continue
+            _linker = ["-dynamiclib" if a == "-bundle" else a for a in _linker]
+            if "-dynamiclib" not in _linker:
+                _linker.append("-dynamiclib")
+            setattr(self.compiler, _link_attr, _linker)
+
         super().build_extension(ext)
 
 
